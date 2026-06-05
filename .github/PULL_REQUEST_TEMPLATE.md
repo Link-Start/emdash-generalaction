@@ -1,28 +1,31 @@
-## Summary
-Briefly describe what this PR does and why 
+### Description
 
-## Fixes 
-If this PR fixes an issue, mention it like: Fixes #123 
+Give a short summary of what changed, why it's needed, and any important implementation notes.
 
-## Snapshot
-Add screenshots, GIFs, or videos demonstrating the changes (if applicable) 
+### Related issues
 
-## Type of change
+Link related issues. If this PR fixes an issue, mention it like: Fixes #123.
 
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] Chore (refactoring code, technical debt, workflow improvements)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Refactor (does not change functionality, e.g. code style improvements, linting)
-- [ ] This change requires a documentation update
- 
-## Mandatory Tasks
+### Testing
 
-- [ ] I have self-reviewed the code
+List the checks you ran, for example `pnpm run format`, `pnpm run lint`,
+`pnpm run typecheck`, `pnpm run test`, and any manual testing.
 
-## Checklist
+### Screenshot/Recording (if applicable)
 
-- [ ] I have read the contributing guide
-- [ ] I have commented my code, particularly in hard-to-understand areas
-- [ ] I have checked if my PR needs changes to the documentation
-- [ ] I have added tests that prove my fix is effective or that my feature works
+Attach a screenshot, GIF, or recording of the change. This is optional, but helps reviewers
+understand UI or workflow changes.
+
+<details>
+<summary>Checklist</summary>
+
+- [ ] I kept this PR small and focused
+- [ ] I ran a self-review before opening this PR
+- [ ] I ran the relevant local checks or explained why not
+- [ ] I updated docs when behavior or setup changed
+- [ ] I added or updated tests when behavior changed, or explained why not
+- [ ] I only added comments where the logic is not obvious
+- [ ] I used [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for commit
+  messages and, when possible, the PR title
+
+</details>

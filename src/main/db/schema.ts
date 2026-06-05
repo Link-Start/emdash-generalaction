@@ -1,5 +1,14 @@
-import { relations, sql } from 'drizzle-orm';
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { isNotNull, relations, sql } from 'drizzle-orm';
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
+import type { StoredBranch } from '@main/core/tasks/stored-branch';
+import type { TerminalShellId } from '@shared/terminal-settings';
 
 export const sshConnections = sqliteTable(
   'ssh_connections',
@@ -12,6 +21,7 @@ export const sshConnections = sqliteTable(
     authType: text('auth_type').notNull().default('agent'), // 'password' | 'key' | 'agent'
     privateKeyPath: text('private_key_path'), // optional, for key auth
     useAgent: integer('use_agent').notNull().default(0), // boolean, 0=false, 1=true
+    metadata: text('metadata'), // JSON for additional connection-specific data
     createdAt: text('created_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
@@ -31,16 +41,13 @@ export const projects = sqliteTable(
     id: text('id').primaryKey(),
     name: text('name').notNull(),
     path: text('path').notNull(),
-    gitRemote: text('git_remote'),
-    gitBranch: text('git_branch'),
+    workspaceProvider: text('workspace_provider').notNull().default('local'), // 'local' | 'ssh'
     baseRef: text('base_ref'),
-    githubRepository: text('github_repository'),
-    githubConnected: integer('github_connected').notNull().default(0),
     sshConnectionId: text('ssh_connection_id').references(() => sshConnections.id, {
       onDelete: 'set null',
     }),
-    isRemote: integer('is_remote').notNull().default(0), // boolean, 0=false, 1=true
-    remotePath: text('remote_path'), // path on remote server
+    /** The shared workspace representing this project's repository root. Set on first mount. */
+    repositoryWorkspaceId: text('repository_workspace_id'),
     createdAt: text('created_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
@@ -51,7 +58,49 @@ export const projects = sqliteTable(
   (table) => ({
     pathIdx: uniqueIndex('idx_projects_path').on(table.path),
     sshConnectionIdIdx: index('idx_projects_ssh_connection_id').on(table.sshConnectionId),
-    isRemoteIdx: index('idx_projects_is_remote').on(table.isRemote),
+  })
+);
+
+export const projectRemotes = sqliteTable(
+  'project_remotes',
+  {
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    remoteName: text('remote_name').notNull(),
+    remoteUrl: text('remote_url').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.projectId, table.remoteName] }),
+  })
+);
+
+export const projectSettings = sqliteTable('project_settings', {
+  projectId: text('project_id')
+    .primaryKey()
+    .references(() => projects.id, { onDelete: 'cascade' }),
+  baseProjectSettingsJson: text('base_project_settings_json').notNull().default('{}'),
+  shareableProjectSettingsJson: text('shareable_project_settings_json').notNull().default('{}'),
+  legacyConfigMigratedAt: text('legacy_config_migrated_at'),
+  createdAt: text('created_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text('updated_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const appSettings = sqliteTable(
+  'app_settings',
+  {
+    key: text('key').primaryKey(),
+    value: text('value').notNull(),
+    updatedAt: integer('updated_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => ({
+    keyIdx: uniqueIndex('idx_app_settings_key').on(table.key),
   })
 );
 
@@ -63,12 +112,10 @@ export const tasks = sqliteTable(
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
-    branch: text('branch').notNull(),
-    path: text('path').notNull(),
-    status: text('status').notNull().default('idle'),
-    agentId: text('agent_id'),
-    metadata: text('metadata'),
-    useWorktree: integer('use_worktree').notNull().default(1),
+    status: text('status').notNull(),
+    sourceBranch: text('source_branch').$type<StoredBranch>(), // @deprecated — moved to workspaces.config (git.fromBranch)
+    taskBranch: text('task_branch'), // @deprecated — moved to workspaces.branch_name
+    linkedIssue: text('linked_issue'),
     archivedAt: text('archived_at'), // null = active, timestamp = archived
     createdAt: text('created_at')
       .notNull()
@@ -76,25 +123,41 @@ export const tasks = sqliteTable(
     updatedAt: text('updated_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    lastInteractedAt: text('last_interacted_at'),
+    statusChangedAt: text('status_changed_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    isPinned: integer('is_pinned').notNull().default(0), // boolean, 0=false, 1=true
+    workspaceProvider: text('workspace_provider'), // @deprecated — superseded by workspaces.type; still read in resolveBootstrap for legacy BYOI tasks
+    workspaceId: text('workspace_id'),
+    workspaceProviderData: text('workspace_provider_data'), // @deprecated — superseded by workspaces.data
+    workspaceIntent: text('workspace_intent'), // JSON: { git: GitSetup; workspace: WorkspaceLocation }
   },
   (table) => ({
     projectIdIdx: index('idx_tasks_project_id').on(table.projectId),
   })
 );
 
-export const conversations = sqliteTable(
-  'conversations',
+export const workspaces = sqliteTable(
+  'workspaces',
   {
     id: text('id').primaryKey(),
-    taskId: text('task_id')
-      .notNull()
-      .references(() => tasks.id, { onDelete: 'cascade' }),
-    title: text('title').notNull(),
-    provider: text('provider'), // AI provider for this chat (claude, codex, qwen, etc.)
-    isActive: integer('is_active').notNull().default(0), // 1 if this is the active chat for the task
-    isMain: integer('is_main').notNull().default(0), // 1 if this is the main/primary chat (gets full persistence)
-    displayOrder: integer('display_order').notNull().default(0), // Order in the tab bar
-    metadata: text('metadata'), // JSON for additional chat-specific data
+    key: text('key'),
+    type: text('type').notNull().$type<'local' | 'project-ssh' | 'byoi'>(), // @deprecated — use kind + location
+    /** Describes the nature of the workspace: a git worktree, the project root, or BYOI. */
+    kind: text('kind').$type<'worktree' | 'project-root' | 'byoi'>(),
+    /** Where the workspace runs: on the local machine or over SSH. */
+    location: text('location').$type<'local' | 'remote'>(),
+    /** FK to ssh_connections; only set when location = 'remote'. */
+    sshConnectionId: text('ssh_connection_id').references(() => sshConnections.id, {
+      onDelete: 'set null',
+    }),
+    data: text('data'),
+    path: text('path'),
+    config: text('config'),
+    branchName: text('branch_name'),
+    linesAdded: integer('lines_added'),
+    linesDeleted: integer('lines_deleted'),
     createdAt: text('created_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
@@ -103,8 +166,240 @@ export const conversations = sqliteTable(
       .default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => ({
+    keyIdx: uniqueIndex('idx_workspaces_key').on(table.key).where(isNotNull(table.key)),
+  })
+);
+
+export const pullRequestUsers = sqliteTable('pull_request_users', {
+  userId: text('user_id').primaryKey(),
+  userName: text('user_name').notNull(),
+  displayName: text('display_name'),
+  avatarUrl: text('avatar_url'),
+  url: text('url'),
+
+  userUpdatedAt: text('user_updated_at'),
+  userCreatedAt: text('user_created_at'),
+});
+
+export const pullRequests = sqliteTable(
+  'pull_requests',
+  {
+    url: text('url').primaryKey(),
+    provider: text('provider').notNull().default('github'),
+    repositoryUrl: text('repository_url').notNull(),
+
+    baseRefName: text('base_ref_name').notNull(),
+    baseRefOid: text('base_ref_oid').notNull(),
+
+    headRepositoryUrl: text('head_repository_url').notNull(),
+    headRefName: text('head_ref_name').notNull(),
+    headRefOid: text('head_ref_oid').notNull(),
+
+    identifier: text('identifier'), // #123 for github
+    title: text('title').notNull(),
+    description: text('description'),
+    status: text('status').notNull().default('open'),
+    isDraft: integer('is_draft'),
+
+    authorUserId: text('author_user_id').references(() => pullRequestUsers.userId, {
+      onDelete: 'set null',
+    }),
+
+    additions: integer('additions'),
+    deletions: integer('deletions'),
+    changedFiles: integer('changed_files'),
+    commitCount: integer('commit_count'),
+
+    mergeableStatus: text('mergeable_status'),
+    mergeStateStatus: text('merge_state_status'),
+    reviewDecision: text('review_decision'),
+
+    pullRequestCreatedAt: text('pull_request_created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    pullRequestUpdatedAt: text('pull_request_updated_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => ({
+    urlIdx: uniqueIndex('idx_pull_requests_url').on(table.url),
+    repositoryUrlIdx: index('idx_pull_requests_repository_url').on(table.repositoryUrl),
+    headRepositoryUrlIdx: index('idx_pull_requests_head_repository_url').on(
+      table.headRepositoryUrl
+    ),
+  })
+);
+
+export const pullRequestLabels = sqliteTable(
+  'pull_request_labels',
+  {
+    pullRequestId: text('pull_request_id')
+      .notNull()
+      .references(() => pullRequests.url, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    color: text('color'),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pullRequestId, table.name] }),
+    nameIdx: index('idx_prl_name').on(table.name),
+  })
+);
+
+export const pullRequestAssignees = sqliteTable(
+  'pull_request_assignees',
+  {
+    pullRequestUrl: text('pull_request_url')
+      .notNull()
+      .references(() => pullRequests.url, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => pullRequestUsers.userId, { onDelete: 'cascade' }),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pullRequestUrl, table.userId] }),
+    pullRequestUrlIdx: index('idx_pra_pull_request_url').on(table.pullRequestUrl),
+    userIdIdx: index('idx_pra_user_id').on(table.userId),
+  })
+);
+
+export const pullRequestChecks = sqliteTable(
+  'pull_request_checks',
+  {
+    id: text('id').primaryKey(),
+    pullRequestUrl: text('pull_request_url')
+      .notNull()
+      .references(() => pullRequests.url, { onDelete: 'cascade' }),
+    commitSha: text('commit_sha').notNull(),
+    name: text('name').notNull(),
+    status: text('status').notNull(),
+    conclusion: text('conclusion').notNull(),
+
+    detailsUrl: text('details_url'),
+    startedAt: text('started_at'),
+    completedAt: text('completed_at'),
+    workflowName: text('workflow_name'),
+    appName: text('app_name'),
+    appLogoUrl: text('app_logo_url'),
+  },
+  (table) => ({
+    pullRequestUrlIdx: index('idx_prc_pull_request_url').on(table.pullRequestUrl),
+  })
+);
+
+export const automations = sqliteTable(
+  'automations',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description'),
+    category: text('category').notNull(),
+    cronExpr: text('cron_expr').notNull(),
+    cronTz: text('cron_tz'),
+    promptTemplate: text('prompt_template').notNull().default(''),
+    actions: text('actions').notNull().default('[]'),
+    taskConfig: text('task_config'),
+    projectId: text('project_id').references(() => projects.id, { onDelete: 'set null' }),
+    enabled: integer('enabled').notNull().default(1),
+    isDraft: integer('is_draft').notNull().default(0),
+    lastRunAt: integer('last_run_at'),
+    nextRunAt: integer('next_run_at'),
+    deadlinePolicy: text('deadline_policy').notNull().default('next-interval'),
+    deadlineMs: integer('deadline_ms'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    enabledNextRunIdx: index('idx_automations_enabled_next_run').on(table.enabled, table.nextRunAt),
+    projectIdIdx: index('idx_automations_project_id').on(table.projectId),
+  })
+);
+
+export const automationRuns = sqliteTable(
+  'automation_runs',
+  {
+    id: text('id').primaryKey(),
+    automationId: text('automation_id')
+      .notNull()
+      .references(() => automations.id, { onDelete: 'cascade' }),
+    scheduledAt: integer('scheduled_at'),
+    deadlineAt: integer('deadline_at'),
+    startedAt: integer('started_at'),
+    finishedAt: integer('finished_at'),
+    status: text('status').notNull(),
+    taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    createdTaskId: text('created_task_id'),
+    error: text('error'),
+    triggerKind: text('trigger_kind').notNull(),
+    workerId: text('worker_id'),
+  },
+  (table) => ({
+    automationStartedIdx: index('idx_automation_runs_automation_started').on(
+      table.automationId,
+      table.startedAt
+    ),
+    automationScheduledIdx: index('idx_automation_runs_automation_scheduled').on(
+      table.automationId,
+      table.scheduledAt
+    ),
+    automationStatusIdx: index('idx_automation_runs_automation_status').on(
+      table.automationId,
+      table.status
+    ),
+    statusIdx: index('idx_automation_runs_status').on(table.status),
+    createdTaskIdIdx: index('idx_automation_runs_created_task_id').on(table.createdTaskId),
+  })
+);
+
+export const conversations = sqliteTable(
+  'conversations',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    provider: text('provider'),
+    config: text('config'),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text('updated_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    lastInteractedAt: text('last_interacted_at'),
+    isInitialConversation: integer('is_initial_conversation', { mode: 'boolean' }),
+    sessionId: text('session_id'),
+  },
+  (table) => ({
     taskIdIdx: index('idx_conversations_task_id').on(table.taskId),
-    activeIdx: index('idx_conversations_active').on(table.taskId, table.isActive), // Index for quick active conversation lookup
+  })
+);
+
+export const terminals = sqliteTable(
+  'terminals',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    ssh: integer('ssh').notNull().default(0), // boolean, 0=false, 1=true
+    name: text('name').notNull(),
+    shellId: text('shell_id').$type<TerminalShellId>().notNull().default('system'),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text('updated_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => ({
+    taskIdIdx: index('idx_terminals_task_id').on(table.taskId),
   })
 );
 
@@ -128,127 +423,72 @@ export const messages = sqliteTable(
   })
 );
 
-// TODO: remove after refactor (resolves migration issues)
-export const lineComments = sqliteTable(
-  'line_comments',
+export const editorBuffers = sqliteTable(
+  'editor_buffers',
   {
-    id: text('id').primaryKey(),
-    taskId: text('task_id')
-      .notNull()
-      .references(() => tasks.id, { onDelete: 'cascade' }),
-    filePath: text('file_path').notNull(),
-    lineNumber: integer('line_number').notNull(),
-    lineContent: text('line_content'),
-    content: text('content').notNull(),
-    createdAt: text('created_at')
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text('updated_at')
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
-    sentAt: text('sent_at'), // NULL = unsent, timestamp = when injected to chat
-  },
-  (table) => ({
-    taskFileIdx: index('idx_line_comments_task_file').on(table.taskId, table.filePath),
-  })
-);
-
-export const workspaceInstances = sqliteTable(
-  'workspace_instances',
-  {
-    id: text('id').primaryKey(),
-    taskId: text('task_id')
-      .notNull()
-      .references(() => tasks.id, { onDelete: 'cascade' }),
-    externalId: text('external_id'), // "id" from script output (e.g. workspace name); nullable
-    host: text('host').notNull(),
-    port: integer('port').notNull().default(22),
-    username: text('username'),
-    worktreePath: text('worktree_path'),
-    status: text('status').notNull().default('provisioning'), // provisioning | ready | terminated | error
-    connectionId: text('connection_id').references(() => sshConnections.id, {
-      onDelete: 'set null',
-    }),
-    createdAt: integer('created_at').notNull(),
-    terminatedAt: integer('terminated_at'),
-  },
-  (table) => ({
-    taskIdIdx: index('idx_workspace_instances_task_id').on(table.taskId),
-    statusIdx: index('idx_workspace_instances_status').on(table.status),
-  })
-);
-
-export const automations = sqliteTable(
-  'automations',
-  {
-    id: text('id').primaryKey(),
+    id: text('id').primaryKey(), // `${projectId}:${workspaceId}:${filePath}`
     projectId: text('project_id')
       .notNull()
       .references(() => projects.id, { onDelete: 'cascade' }),
-    projectName: text('project_name').notNull().default(''),
-    name: text('name').notNull(),
-    prompt: text('prompt').notNull(),
-    agentId: text('agent_id').notNull(),
-    mode: text('mode').notNull().default('schedule'), // 'schedule' | 'trigger'
-    schedule: text('schedule').notNull(), // JSON encoded AutomationSchedule
-    triggerType: text('trigger_type'), // 'github_pr' | 'github_issue' | 'linear_issue'
-    triggerConfig: text('trigger_config'), // JSON encoded TriggerConfig
-    useWorktree: integer('use_worktree').notNull().default(1), // boolean
-    status: text('status').notNull().default('active'),
-    lastRunAt: text('last_run_at'),
-    nextRunAt: text('next_run_at'),
-    runCount: integer('run_count').notNull().default(0),
-    lastRunResult: text('last_run_result'),
-    lastRunError: text('last_run_error'),
-    createdAt: text('created_at')
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text('updated_at')
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
+    workspaceId: text('workspace_id').notNull(),
+    filePath: text('file_path').notNull(),
+    content: text('content').notNull(),
+    updatedAt: integer('updated_at').notNull(),
   },
   (table) => ({
-    projectIdIdx: index('idx_automations_project_id').on(table.projectId),
-    statusNextRunIdx: index('idx_automations_status_next_run').on(table.status, table.nextRunAt),
-    updatedAtIdx: index('idx_automations_updated_at').on(table.updatedAt),
-  })
-);
-
-export const automationRunLogs = sqliteTable(
-  'automation_run_logs',
-  {
-    id: text('id').primaryKey(),
-    automationId: text('automation_id')
-      .notNull()
-      .references(() => automations.id, { onDelete: 'cascade' }),
-    startedAt: text('started_at').notNull(),
-    finishedAt: text('finished_at'),
-    status: text('status').notNull(),
-    error: text('error'),
-    taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
-  },
-  (table) => ({
-    automationStartedIdx: index('idx_automation_run_logs_automation_started').on(
-      table.automationId,
-      table.startedAt
+    workspaceFileIdx: index('idx_editor_buffers_workspace_file').on(
+      table.workspaceId,
+      table.filePath
     ),
-    statusIdx: index('idx_automation_run_logs_status').on(table.status),
   })
 );
 
-export type WorkspaceInstanceRow = typeof workspaceInstances.$inferSelect;
-export type WorkspaceInstanceInsert = typeof workspaceInstances.$inferInsert;
+export const kv = sqliteTable(
+  'kv',
+  {
+    key: text('key').primaryKey(),
+    value: text('value').notNull(),
+    updatedAt: integer('updated_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => ({
+    keyIdx: uniqueIndex('idx_kv_key').on(table.key),
+  })
+);
+
+export const appSecrets = sqliteTable(
+  'app_secrets',
+  {
+    key: text('key').primaryKey(),
+    secret: text('secret').notNull(),
+  },
+  (table) => ({
+    keyIdx: uniqueIndex('idx_app_secrets_key').on(table.key),
+  })
+);
 
 export const sshConnectionsRelations = relations(sshConnections, ({ many }) => ({
   projects: many(projects),
-  workspaceInstances: many(workspaceInstances),
 }));
 
 export const projectsRelations = relations(projects, ({ one, many }) => ({
   tasks: many(tasks),
+  automations: many(automations),
+  settings: one(projectSettings, {
+    fields: [projects.id],
+    references: [projectSettings.projectId],
+  }),
   sshConnection: one(sshConnections, {
     fields: [projects.sshConnectionId],
     references: [sshConnections.id],
+  }),
+}));
+
+export const projectSettingsRelations = relations(projectSettings, ({ one }) => ({
+  project: one(projects, {
+    fields: [projectSettings.projectId],
+    references: [projects.id],
   }),
 }));
 
@@ -258,19 +498,25 @@ export const tasksRelations = relations(tasks, ({ one, many }) => ({
     references: [projects.id],
   }),
   conversations: many(conversations),
-  lineComments: many(lineComments),
-  workspaceInstances: many(workspaceInstances),
-  automationRunLogs: many(automationRunLogs),
+  automationRuns: many(automationRuns),
 }));
 
-export const workspaceInstancesRelations = relations(workspaceInstances, ({ one }) => ({
-  task: one(tasks, {
-    fields: [workspaceInstances.taskId],
-    references: [tasks.id],
+export const automationsRelations = relations(automations, ({ one, many }) => ({
+  project: one(projects, {
+    fields: [automations.projectId],
+    references: [projects.id],
   }),
-  sshConnection: one(sshConnections, {
-    fields: [workspaceInstances.connectionId],
-    references: [sshConnections.id],
+  runs: many(automationRuns),
+}));
+
+export const automationRunsRelations = relations(automationRuns, ({ one }) => ({
+  automation: one(automations, {
+    fields: [automationRuns.automationId],
+    references: [automations.id],
+  }),
+  task: one(tasks, {
+    fields: [automationRuns.taskId],
+    references: [tasks.id],
   }),
 }));
 
@@ -289,41 +535,22 @@ export const messagesRelations = relations(messages, ({ one }) => ({
   }),
 }));
 
-export const lineCommentsRelations = relations(lineComments, ({ one }) => ({
-  task: one(tasks, {
-    fields: [lineComments.taskId],
-    references: [tasks.id],
-  }),
-}));
-
-export const automationsRelations = relations(automations, ({ one, many }) => ({
-  project: one(projects, {
-    fields: [automations.projectId],
-    references: [projects.id],
-  }),
-  runLogs: many(automationRunLogs),
-}));
-
-export const automationRunLogsRelations = relations(automationRunLogs, ({ one }) => ({
-  automation: one(automations, {
-    fields: [automationRunLogs.automationId],
-    references: [automations.id],
-  }),
-  task: one(tasks, {
-    fields: [automationRunLogs.taskId],
-    references: [tasks.id],
-  }),
-}));
-
 export type SshConnectionRow = typeof sshConnections.$inferSelect;
 export type SshConnectionInsert = typeof sshConnections.$inferInsert;
 export type ProjectRow = typeof projects.$inferSelect;
+export type AutomationRow = typeof automations.$inferSelect;
+export type AutomationRunRow = typeof automationRuns.$inferSelect;
+export type ProjectSettingsRow = typeof projectSettings.$inferSelect;
+export type ProjectSettingsInsert = typeof projectSettings.$inferInsert;
 export type TaskRow = typeof tasks.$inferSelect;
 export type ConversationRow = typeof conversations.$inferSelect;
+export type TerminalRow = typeof terminals.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;
-export type LineCommentRow = typeof lineComments.$inferSelect;
-export type LineCommentInsert = typeof lineComments.$inferInsert;
-export type AutomationRow = typeof automations.$inferSelect;
-export type AutomationInsert = typeof automations.$inferInsert;
-export type AutomationRunLogRow = typeof automationRunLogs.$inferSelect;
-export type AutomationRunLogInsert = typeof automationRunLogs.$inferInsert;
+export type EditorBufferRow = typeof editorBuffers.$inferSelect;
+export type EditorBufferInsert = typeof editorBuffers.$inferInsert;
+export type KvRow = typeof kv.$inferSelect;
+export type KvInsert = typeof kv.$inferInsert;
+export type AppSecretRow = typeof appSecrets.$inferSelect;
+export type AppSecretInsert = typeof appSecrets.$inferInsert;
+export type WorkspaceRow = typeof workspaces.$inferSelect;
+export type WorkspaceInsert = typeof workspaces.$inferInsert;

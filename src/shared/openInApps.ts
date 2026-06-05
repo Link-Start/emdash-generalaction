@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 export type PlatformKey = 'darwin' | 'win32' | 'linux';
 
 export type PlatformConfig = {
@@ -6,6 +8,10 @@ export type PlatformConfig = {
   checkCommands?: string[];
   bundleIds?: string[];
   appNames?: string[];
+  // Free-form mdfind query (darwin only). App is considered installed if the
+  // query returns any results. Use when bundleIds/appNames can't distinguish
+  // the app (e.g., stable and Canary share a bundle ID but differ in display name).
+  mdfindQuery?: string;
   label?: string;
   iconPath?: string;
 };
@@ -29,43 +35,48 @@ const ICON_PATHS = {
   cursor: 'cursor.svg',
   vscode: 'vscode.png',
   vscodium: 'vscodium.png',
-  terminal: 'terminal.png',
+  windsurf: 'windsurf.png',
   xcode: 'xcode.png',
-  warp: 'warp.svg',
+  terminal: 'terminal.png',
+  kaku: 'kaku.png',
+  alacritty: 'alacritty.svg',
+  warp: 'warp.png',
   iterm2: 'iterm2.png',
   ghostty: 'ghostty.png',
+  kitty: 'kitty.png',
+  termy: 'termy.png',
   zed: 'zed.png',
+  trae: 'trae.png',
   'intellij-idea': 'intellij-idea.svg',
+  'android-studio': 'android-studio.svg',
+  'android-studio-canary': 'android-studio-canary.svg',
   webstorm: 'webstorm.svg',
   pycharm: 'pycharm.svg',
+  rubymine: 'rubymine.svg',
   rustrover: 'rustrover.svg',
-  phpstorm: 'phpstorm.svg',
-  'android-studio': 'android-studio.svg',
   kiro: 'kiro.png',
-  windsurf: 'windsurf.svg',
+  antigravity: 'antigravity.png',
 } as const;
 
-export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
-  {
+const _OPEN_IN_APPS = {
+  finder: {
     id: 'finder',
     label: 'Finder',
     iconPath: ICON_PATHS.finder,
     alwaysAvailable: true,
+    // AppService opens the platform file manager via Electron shell.openPath.
     platforms: {
-      darwin: { openCommands: ['open {{path}}'] },
       win32: {
-        openCommands: ['explorer "{{path_raw}}"'],
         label: 'Explorer',
         iconPath: ICON_PATHS.explorer,
       },
       linux: {
-        openCommands: ['xdg-open {{path}}'],
         label: 'Files',
         iconPath: ICON_PATHS.files,
       },
     },
   },
-  {
+  cursor: {
     id: 'cursor',
     label: 'Cursor',
     iconPath: ICON_PATHS.cursor,
@@ -79,7 +90,7 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
         appNames: ['Cursor'],
       },
       win32: {
-        openCommands: ['start "" cursor {{path}}'],
+        openCommands: ['cursor {{path}}'],
         checkCommands: ['cursor'],
       },
       linux: {
@@ -88,7 +99,7 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
       },
     },
   },
-  {
+  vscode: {
     id: 'vscode',
     label: 'VS Code',
     iconPath: ICON_PATHS.vscode,
@@ -102,50 +113,25 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
           'open -n -a "Visual Studio Code" {{path}}',
         ],
         checkCommands: ['code'],
-        bundleIds: ['com.microsoft.VSCode'],
+        bundleIds: ['com.microsoft.VSCode', 'com.microsoft.VSCodeInsiders'],
         appNames: ['Visual Studio Code'],
       },
       win32: {
-        openCommands: ['start "" code {{path}}'],
-        checkCommands: ['code'],
+        openCommands: ['code {{path}}', 'code-insiders {{path}}'],
+        checkCommands: ['code', 'code-insiders'],
       },
       linux: {
-        openCommands: ['code {{path}}'],
-        checkCommands: ['code'],
+        openCommands: ['code {{path}}', 'code-insiders {{path}}'],
+        checkCommands: ['code', 'code-insiders'],
       },
     },
   },
-  {
-    id: 'vscode-insiders',
-    label: 'VS Code Insiders',
-    iconPath: ICON_PATHS.vscode,
-    autoInstall: true,
-    hideIfUnavailable: true,
-    platforms: {
-      darwin: {
-        openCommands: [
-          'command -v code-insiders >/dev/null 2>&1 && code-insiders {{path}}',
-          'open -n -b com.microsoft.VSCodeInsiders --args {{path}}',
-          'open -n -a "Visual Studio Code - Insiders" {{path}}',
-        ],
-        checkCommands: ['code-insiders'],
-        bundleIds: ['com.microsoft.VSCodeInsiders'],
-        appNames: ['Visual Studio Code - Insiders'],
-      },
-      win32: {
-        openCommands: ['start "" code-insiders {{path}}'],
-        checkCommands: ['code-insiders'],
-      },
-      linux: {
-        openCommands: ['code-insiders {{path}}'],
-        checkCommands: ['code-insiders'],
-      },
-    },
-  },
-  {
+  vscodium: {
     id: 'vscodium',
     label: 'VSCodium',
     iconPath: ICON_PATHS.vscodium,
+    autoInstall: true,
+    supportsRemote: true,
     platforms: {
       darwin: {
         openCommands: [
@@ -158,7 +144,7 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
         appNames: ['VSCodium'],
       },
       win32: {
-        openCommands: ['start "" codium {{path}}'],
+        openCommands: ['codium {{path}}'],
         checkCommands: ['codium'],
       },
       linux: {
@@ -167,7 +153,50 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
       },
     },
   },
-  {
+  windsurf: {
+    id: 'windsurf',
+    label: 'Windsurf',
+    iconPath: ICON_PATHS.windsurf,
+    autoInstall: true,
+    platforms: {
+      darwin: {
+        openCommands: [
+          'command -v windsurf >/dev/null 2>&1 && windsurf {{path}}',
+          'open -n -b com.exafunction.windsurf --args {{path}}',
+          'open -n -a "Windsurf" {{path}}',
+        ],
+        checkCommands: ['windsurf'],
+        bundleIds: ['com.exafunction.windsurf'],
+        appNames: ['Windsurf'],
+      },
+      win32: {
+        openCommands: ['windsurf {{path}}'],
+        checkCommands: ['windsurf'],
+      },
+      linux: {
+        openCommands: ['windsurf {{path}}'],
+        checkCommands: ['windsurf'],
+      },
+    },
+  },
+  xcode: {
+    id: 'xcode',
+    label: 'Xcode',
+    iconPath: ICON_PATHS.xcode,
+    platforms: {
+      darwin: {
+        openCommands: [
+          'command -v xed >/dev/null 2>&1 && xed {{path}}',
+          'open -n -b com.apple.dt.Xcode --args {{path}}',
+          'open -n -a "Xcode" {{path}}',
+        ],
+        checkCommands: ['xed'],
+        bundleIds: ['com.apple.dt.Xcode'],
+        appNames: ['Xcode'],
+      },
+    },
+  },
+  terminal: {
     id: 'terminal',
     label: 'Terminal',
     iconPath: ICON_PATHS.terminal,
@@ -187,20 +216,56 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
       },
     },
   },
-  {
-    id: 'xcode',
-    label: 'Xcode',
-    iconPath: ICON_PATHS.xcode,
-    hideIfUnavailable: true,
+  kaku: {
+    id: 'kaku',
+    label: 'Kaku',
+    iconPath: ICON_PATHS.kaku,
+    supportsRemote: true,
     platforms: {
       darwin: {
-        openCommands: ['open -b com.apple.dt.Xcode {{path}}', 'open -a "Xcode" {{path}}'],
-        bundleIds: ['com.apple.dt.Xcode'],
-        appNames: ['Xcode'],
+        openCommands: [
+          'command -v kaku >/dev/null 2>&1 && kaku start --cwd {{path}}',
+          'open -na "Kaku" --args start --cwd {{path}}',
+        ],
+        checkCommands: ['kaku'],
+        appNames: ['Kaku'],
+      },
+      linux: {
+        openCommands: ['kaku start --cwd {{path}}'],
+        checkCommands: ['kaku'],
       },
     },
   },
-  {
+  alacritty: {
+    id: 'alacritty',
+    label: 'Alacritty',
+    iconPath: ICON_PATHS.alacritty,
+    supportsRemote: true,
+    platforms: {
+      darwin: {
+        openCommands: [
+          'command -v alacritty >/dev/null 2>&1 && alacritty --working-directory {{path}}',
+          'open -n -b org.alacritty --args --working-directory {{path}}',
+          'open -na "Alacritty" --args --working-directory {{path}}',
+        ],
+        checkCommands: ['alacritty'],
+        bundleIds: ['org.alacritty'],
+        appNames: ['Alacritty'],
+      },
+      win32: {
+        openCommands: [
+          'start "" alacritty --working-directory "{{path_raw}}"',
+          'alacritty --working-directory "{{path_raw}}"',
+        ],
+        checkCommands: ['alacritty'],
+      },
+      linux: {
+        openCommands: ['alacritty --working-directory {{path}}'],
+        checkCommands: ['alacritty'],
+      },
+    },
+  },
+  warp: {
     id: 'warp',
     label: 'Warp',
     iconPath: ICON_PATHS.warp,
@@ -212,10 +277,11 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
           'warppreview://action/new_window?path={{path_url}}',
         ],
         bundleIds: ['dev.warp.Warp-Stable'],
+        appNames: ['Warp'],
       },
     },
   },
-  {
+  iterm2: {
     id: 'iterm2',
     label: 'iTerm2',
     iconPath: ICON_PATHS.iterm2,
@@ -232,7 +298,7 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
       },
     },
   },
-  {
+  ghostty: {
     id: 'ghostty',
     label: 'Ghostty',
     iconPath: ICON_PATHS.ghostty,
@@ -249,26 +315,55 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
       },
     },
   },
-  {
-    id: 'foot',
-    label: 'Foot',
-    iconPath: ICON_PATHS.terminal,
+  kitty: {
+    id: 'kitty',
+    label: 'Kitty',
+    iconPath: ICON_PATHS.kitty,
     supportsRemote: true,
     platforms: {
-      linux: {
+      darwin: {
         openCommands: [
-          'footclient --working-directory={{path}}',
-          'foot --working-directory={{path}}',
+          'open -n -b net.kovidgoyal.kitty --args --directory {{path}}',
+          'open -na "kitty" --args --directory {{path}}',
         ],
-        checkCommands: ['footclient', 'foot'],
+        bundleIds: ['net.kovidgoyal.kitty'],
+        appNames: ['kitty'],
+      },
+      linux: {
+        openCommands: ['kitty --directory {{path}}'],
+        checkCommands: ['kitty'],
       },
     },
   },
-  {
+  termy: {
+    id: 'termy',
+    label: 'Termy',
+    iconPath: ICON_PATHS.termy,
+    platforms: {
+      darwin: {
+        openCommands: [
+          'command -v termy >/dev/null 2>&1 && termy --working-directory={{path}}',
+          'open -a "Termy" {{path}}',
+        ],
+        checkCommands: ['termy'],
+        appNames: ['Termy'],
+      },
+      win32: {
+        openCommands: ['start "" termy --working-directory={{path}}'],
+        checkCommands: ['termy'],
+      },
+      linux: {
+        openCommands: ['termy --working-directory={{path}}'],
+        checkCommands: ['termy'],
+      },
+    },
+  },
+  zed: {
     id: 'zed',
     label: 'Zed',
     iconPath: ICON_PATHS.zed,
     autoInstall: true,
+    supportsRemote: true,
     platforms: {
       darwin: {
         openCommands: ['command -v zed >/dev/null 2>&1 && zed {{path}}', 'open -a "Zed" {{path}}'],
@@ -279,9 +374,13 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
         openCommands: ['zed {{path}}', 'xdg-open {{path}}'],
         checkCommands: ['zed'],
       },
+      win32: {
+        openCommands: ['zed {{path}}'],
+        checkCommands: ['zed'],
+      },
     },
   },
-  {
+  kiro: {
     id: 'kiro',
     label: 'Kiro',
     iconPath: ICON_PATHS.kiro,
@@ -297,7 +396,7 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
         appNames: ['Kiro'],
       },
       win32: {
-        openCommands: ['start "" kiro {{path}}'],
+        openCommands: ['kiro {{path}}'],
         checkCommands: ['kiro'],
       },
       linux: {
@@ -306,35 +405,79 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
       },
     },
   },
-  {
-    id: 'windsurf',
-    label: 'Windsurf',
-    iconPath: ICON_PATHS.windsurf,
-    invertInDark: true,
+  antigravity: {
+    id: 'antigravity',
+    label: 'Antigravity',
+    iconPath: ICON_PATHS.antigravity,
     autoInstall: true,
-    supportsRemote: true,
     platforms: {
       darwin: {
         openCommands: [
-          'command -v windsurf >/dev/null 2>&1 && windsurf {{path}}',
-          'open -n -b com.codeium.windsurf --args {{path}}',
-          'open -n -a "Windsurf" {{path}}',
+          'command -v antigravity >/dev/null 2>&1 && antigravity {{path}}',
+          'open -a "Antigravity" {{path}}',
         ],
-        checkCommands: ['windsurf'],
-        bundleIds: ['com.codeium.windsurf'],
-        appNames: ['Windsurf'],
+        checkCommands: ['antigravity'],
+        appNames: ['Antigravity'],
       },
       win32: {
-        openCommands: ['start "" windsurf {{path}}'],
-        checkCommands: ['windsurf'],
+        openCommands: ['antigravity {{path}}'],
+        checkCommands: ['antigravity'],
       },
       linux: {
-        openCommands: ['windsurf {{path}}'],
-        checkCommands: ['windsurf'],
+        openCommands: ['antigravity {{path}}'],
+        checkCommands: ['antigravity'],
       },
     },
   },
-  {
+  trae: {
+    id: 'trae',
+    label: 'Trae',
+    iconPath: ICON_PATHS.trae,
+    autoInstall: true,
+    platforms: {
+      darwin: {
+        openCommands: [
+          'command -v trae >/dev/null 2>&1 && trae {{path}}',
+          'open -a "Trae" {{path}}',
+        ],
+        checkCommands: ['trae'],
+        appNames: ['Trae'],
+      },
+      win32: {
+        openCommands: ['trae "{{path_raw}}"'],
+        checkCommands: ['trae'],
+      },
+      linux: {
+        openCommands: ['trae {{path}}'],
+        checkCommands: ['trae'],
+      },
+    },
+  },
+  'trae-solo': {
+    id: 'trae-solo',
+    label: 'Trae Solo',
+    iconPath: ICON_PATHS.trae,
+    autoInstall: true,
+    platforms: {
+      darwin: {
+        openCommands: [
+          'command -v trae-solo >/dev/null 2>&1 && trae-solo {{path}}',
+          'open -a "Trae Solo" {{path}}',
+        ],
+        checkCommands: ['trae-solo'],
+        appNames: ['Trae Solo'],
+      },
+      win32: {
+        openCommands: ['trae-solo "{{path_raw}}"'],
+        checkCommands: ['trae-solo'],
+      },
+      linux: {
+        openCommands: ['trae-solo {{path}}'],
+        checkCommands: ['trae-solo'],
+      },
+    },
+  },
+  'intellij-idea': {
     id: 'intellij-idea',
     label: 'IntelliJ IDEA',
     iconPath: ICON_PATHS['intellij-idea'],
@@ -355,7 +498,56 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
       },
     },
   },
-  {
+  'android-studio': {
+    id: 'android-studio',
+    label: 'Android Studio',
+    iconPath: ICON_PATHS['android-studio'],
+    hideIfUnavailable: true,
+    platforms: {
+      darwin: {
+        openCommands: ['open -a "Android Studio" {{path}}'],
+        bundleIds: ['com.google.android.studio'],
+        appNames: ['Android Studio'],
+      },
+      win32: {
+        openCommands: ['studio64 {{path}}', 'studio {{path}}'],
+        checkCommands: ['studio64', 'studio'],
+      },
+      linux: {
+        openCommands: ['studio {{path}}'],
+        checkCommands: ['studio'],
+      },
+    },
+  },
+  'android-studio-canary': {
+    id: 'android-studio-canary',
+    label: 'Android Studio Canary',
+    iconPath: ICON_PATHS['android-studio-canary'],
+    hideIfUnavailable: true,
+    platforms: {
+      darwin: {
+        // Canary shares bundle ID com.google.android.studio with stable, so we
+        // search by display name containing "Canary" (e.g. "Android Studio Otter
+        // 3 Feature Drop 2025.2.3 Canary 3.app" or "Android Studio Canary X.Y").
+        mdfindQuery:
+          'kMDItemCFBundleIdentifier == "com.google.android.studio" && kMDItemDisplayName == "*Canary*"cd',
+        openCommands: [
+          'CANARY=$(mdfind \'kMDItemCFBundleIdentifier == "com.google.android.studio" && kMDItemDisplayName == "*Canary*"cd\' | head -n 1) && [ -n "$CANARY" ] && open -a "$CANARY" {{path}}',
+          'open -a "Android Studio Preview" {{path}}',
+        ],
+        appNames: ['Android Studio Preview'],
+      },
+      win32: {
+        openCommands: ['studio-preview {{path}}'],
+        checkCommands: ['studio-preview'],
+      },
+      linux: {
+        openCommands: ['studio-preview {{path}}'],
+        checkCommands: ['studio-preview'],
+      },
+    },
+  },
+  webstorm: {
     id: 'webstorm',
     label: 'WebStorm',
     iconPath: ICON_PATHS.webstorm,
@@ -376,7 +568,7 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
       },
     },
   },
-  {
+  pycharm: {
     id: 'pycharm',
     label: 'PyCharm',
     iconPath: ICON_PATHS.pycharm,
@@ -397,7 +589,28 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
       },
     },
   },
-  {
+  rubymine: {
+    id: 'rubymine',
+    label: 'RubyMine',
+    iconPath: ICON_PATHS.rubymine,
+    hideIfUnavailable: true,
+    platforms: {
+      darwin: {
+        openCommands: ['open -a "RubyMine" {{path}}'],
+        bundleIds: ['com.jetbrains.rubymine'],
+        appNames: ['RubyMine'],
+      },
+      win32: {
+        openCommands: ['rubymine64 {{path}}', 'rubymine {{path}}'],
+        checkCommands: ['rubymine64', 'rubymine'],
+      },
+      linux: {
+        openCommands: ['rubymine {{path}}'],
+        checkCommands: ['rubymine'],
+      },
+    },
+  },
+  rustrover: {
     id: 'rustrover',
     label: 'RustRover',
     iconPath: ICON_PATHS.rustrover,
@@ -418,68 +631,29 @@ export const OPEN_IN_APPS: OpenInAppConfigShape[] = [
       },
     },
   },
-  {
-    id: 'phpstorm',
-    label: 'PhpStorm',
-    iconPath: ICON_PATHS.phpstorm,
-    hideIfUnavailable: true,
-    platforms: {
-      darwin: {
-        openCommands: ['open -a "PhpStorm" {{path}}'],
-        bundleIds: ['com.jetbrains.PhpStorm'],
-        appNames: ['PhpStorm'],
-      },
-      win32: {
-        openCommands: ['phpstorm64 {{path}}', 'phpstorm {{path}}'],
-        checkCommands: ['phpstorm64', 'phpstorm'],
-      },
-      linux: {
-        openCommands: ['phpstorm {{path}}'],
-        checkCommands: ['phpstorm'],
-      },
-    },
-  },
-  {
-    id: 'android-studio',
-    label: 'Android Studio',
-    iconPath: ICON_PATHS['android-studio'],
-    hideIfUnavailable: true,
-    platforms: {
-      darwin: {
-        openCommands: ['studio {{path}}', 'open -a "Android Studio" {{path}}'],
-        bundleIds: ['com.google.android.studio'],
-        appNames: ['Android Studio'],
-        checkCommands: ['studio'],
-      },
-      win32: {
-        openCommands: ['studio64 {{path}}', 'studio {{path}}'],
-        checkCommands: ['studio64', 'studio'],
-      },
-      linux: {
-        openCommands: ['studio {{path}}'],
-        checkCommands: ['studio'],
-      },
-    },
-  },
-] as const;
+} satisfies Record<string, OpenInAppConfigShape>;
 
-export type OpenInAppId = (typeof OPEN_IN_APPS)[number]['id'];
+export type OpenInAppId = keyof typeof _OPEN_IN_APPS;
 
 export type OpenInAppConfig = OpenInAppConfigShape & { id: OpenInAppId };
 
+// Re-export as a properly typed Record so Object.values() yields OpenInAppConfig[]
+// and app.id is narrowed to OpenInAppId throughout the codebase.
+export const OPEN_IN_APPS: Record<OpenInAppId, OpenInAppConfig> = _OPEN_IN_APPS as Record<
+  OpenInAppId,
+  OpenInAppConfig
+>;
+
+export const OPEN_IN_APP_IDS = Object.keys(OPEN_IN_APPS) as [OpenInAppId, ...OpenInAppId[]];
+
+export const openInAppIdSchema = z.enum(OPEN_IN_APP_IDS);
+
 export function getAppById(id: string): OpenInAppConfig | undefined {
-  return OPEN_IN_APPS.find((app) => app.id === id);
+  return isValidOpenInAppId(id) ? OPEN_IN_APPS[id] : undefined;
 }
 
 export function isValidOpenInAppId(value: unknown): value is OpenInAppId {
-  return typeof value === 'string' && OPEN_IN_APPS.some((app) => app.id === value);
-}
-
-export function isOpenInAppSupportedForWorkspace(
-  app: Pick<OpenInAppConfigShape, 'supportsRemote'>,
-  isRemote: boolean
-): boolean {
-  return !isRemote || app.supportsRemote === true;
+  return typeof value === 'string' && value in OPEN_IN_APPS;
 }
 
 export function getResolvedLabel(app: OpenInAppConfigShape, platform: PlatformKey): string {
